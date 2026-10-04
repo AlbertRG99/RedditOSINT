@@ -6,6 +6,9 @@ live**, activity patterns, leaked identifiers, and an exposure score.
 
 No dependencies, no API keys, no login. Just `python3`.
 
+![image](https://github.com/AlbertRG99/RedditOSINT/blob/main/reddit_sherlock_img.png)
+
+
 ```bash
 python3 reddit_osint.py someuser
 ```
