@@ -1,4 +1,4 @@
-# reddit_osint
+# RedditOSINT
 
 Reddit OSINT by username. Give it a username and it returns everything the public Reddit
 archives have indexed for that account: posts, comments, **what was deleted and what is still
