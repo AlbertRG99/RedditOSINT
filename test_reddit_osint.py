@@ -299,6 +299,91 @@ class UrlBuildingTests(unittest.TestCase):
     def test_no_cursor_no_after(self):
         self.assertNotIn("after=", ro.build_search_url("arctic", "posts", OFFLINE_USERNAME))
 
+    def test_sort_desc(self):
+        url = ro.build_search_url("arctic", "posts", OFFLINE_USERNAME, sort="desc")
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["sort"],
+                         ["desc"])
+
+    def test_global_search_omits_author(self):
+        url = ro.build_search_url("arctic", "posts", keywords="aws")
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        self.assertEqual(q["query"], ["aws"])
+        self.assertNotIn("author", q)
+
+    def test_requires_user_or_keywords(self):
+        with self.assertRaises(ValueError):
+            ro.build_search_url("arctic", "posts")
+
+
+class SummarizeItemTests(unittest.TestCase):
+    def post(self, **kw):
+        base = {"id": "abc", "author": OFFLINE_USERNAME, "subreddit": "dotnet",
+                "score": 7, "created_utc": 1700000000, "title": "Title",
+                "selftext": "body", "permalink": "/r/dotnet/comments/abc/"}
+        base.update(kw)
+        return base
+
+    def test_fields(self):
+        item = ro.summarize_item(self.post(), "posts")
+        self.assertEqual(item["id"], "abc")
+        self.assertEqual(item["kind"], "posts")
+        self.assertEqual(item["status"], "live")
+        self.assertEqual(item["subreddit"], "dotnet")
+        self.assertTrue(item["utc"].startswith("2023-11-"))
+        self.assertTrue(item["url"].endswith("/r/dotnet/comments/abc/"))
+        self.assertFalse(item["text_truncated"])
+
+    def test_truncation_flagged(self):
+        item = ro.summarize_item(self.post(selftext="x" * 500), "posts", text_limit=100)
+        self.assertEqual(len(item["text"]), 100)
+        self.assertTrue(item["text_truncated"])
+
+    def test_deleted_marker(self):
+        self.assertEqual(ro.summarize_item(self.post(selftext="[deleted]"), "posts")["status"],
+                         "deleted")
+
+
+class SearchArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.api = FakeAPI()
+        self.srv, self.url = start_server(OriginHandler, "api", self.api)
+        self._old = ro.ARCTIC
+        ro.ARCTIC = self.url
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        ro.ARCTIC = self._old
+
+    def test_newest_first_and_limited(self):
+        self.api.add("/api/posts/search", lambda path, q: (
+            200, {"data": [post(f"p{i}", 2000 - i) for i in range(5)]}))
+        out = ro.search_archive("rust", "posts", "arctic", author=OFFLINE_USERNAME, limit=3)
+        self.assertEqual([i["id"] for i in out], ["p0", "p1", "p2"])
+        self.assertIn("author=" + OFFLINE_USERNAME, self.api.hits[0])
+        self.assertIn("query=rust", self.api.hits[0])
+        self.assertNotIn("after=", self.api.hits[0])
+
+    def test_oldest_first(self):
+        self.api.add("/api/posts/search", lambda path, q: (
+            200, {"data": [post("late", 3000), post("early", 1000)]}))
+        out = ro.search_archive("rust", "posts", "arctic", author=OFFLINE_USERNAME, limit=2,
+                                sort="asc")
+        self.assertEqual([i["id"] for i in out], ["early", "late"])
+
+    def test_requires_keywords_or_author(self):
+        with self.assertRaises(ValueError):
+            ro.search_archive()
+
+    def test_empty_result(self):
+        self.api.add("/api/comments/search", lambda path, q: (200, {"data": []}))
+        self.assertEqual(ro.search_archive("rust", "comments", "arctic",
+                                           author=OFFLINE_USERNAME), [])
+
+    def test_source_failure_raises(self):
+        with self.assertRaises(ro.FetchError):
+            ro.search_archive("rust", "posts", "arctic", author=OFFLINE_USERNAME)
+
 
 class FetchAllTests(unittest.TestCase):
     def setUp(self):

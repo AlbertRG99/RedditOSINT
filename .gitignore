@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Generated reports and proxy lists can contain personal data, never commit them.
+*.json
+proxies*.txt
+*_report.txt

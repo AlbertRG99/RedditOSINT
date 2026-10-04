@@ -227,10 +227,14 @@ def http_get(url, session=None, **kwargs):
     return (session or PoolSession(**kwargs)).get(url)
 
 
-def build_search_url(source, kind, user, limit=100, cursor=None, subreddit=None,
-                     keywords=None, over18=None):
+def build_search_url(source, kind, user=None, limit=100, cursor=None, subreddit=None,
+                     keywords=None, over18=None, sort="asc"):
+    if not user and not keywords:
+        raise ValueError("build_search_url needs a user, keywords, or both")
+    params = {"limit": limit, "sort": sort}
+    if user:
+        params["author"] = user
     if source == "arctic":
-        params = {"limit": limit, "sort": "asc", "author": user}
         if subreddit:
             params["subreddit"] = subreddit
         if over18 is not None:
@@ -239,7 +243,6 @@ def build_search_url(source, kind, user, limit=100, cursor=None, subreddit=None,
             params["query" if kind == "posts" else "body"] = keywords
         base = f"{ARCTIC}/api/{kind}/search"
     else:
-        params = {"limit": limit, "sort": "asc", "author": user}
         if subreddit:
             params["subreddit"] = subreddit
         if keywords:
@@ -310,6 +313,35 @@ def text_of(item, kind):
     if kind == "posts":
         return f"{item.get('title') or ''} {item.get('selftext') or ''}".strip()
     return (item.get("body") or "").strip()
+
+
+def summarize_item(item, kind, text_limit=600):
+    return {
+        "id": item.get("id"),
+        "kind": kind,
+        "status": status_of(item, kind),
+        "subreddit": item.get("subreddit"),
+        "score": item.get("score"),
+        "created_utc": item.get("created_utc"),
+        "utc": datetime.fromtimestamp(item["created_utc"], timezone.utc).isoformat()
+               if item.get("created_utc") else None,
+        "title": item.get("title"),
+        "text": text_of(item, kind)[:text_limit],
+        "text_truncated": len(text_of(item, kind)) > text_limit,
+        "url": "https://www.reddit.com" + item["permalink"] if item.get("permalink")
+               else item.get("url"),
+    }
+
+
+def search_archive(keywords=None, kind="posts", source="arctic", subreddit=None,
+                   author=None, limit=50, before=None, session=None, text_limit=600,
+                   sort="desc"):
+    url = build_search_url(source, kind, user=author, limit=limit, cursor=before,
+                           subreddit=subreddit, keywords=keywords, sort=sort)
+    rows = http_get(url, session=session).get("data") or []
+    reverse = sort != "asc"
+    rows.sort(key=lambda r: r.get("created_utc") or 0, reverse=reverse)
+    return [summarize_item(r, kind, text_limit) for r in rows[:limit]]
 
 
 def scrape_signals(text):
@@ -450,14 +482,7 @@ def analyze(user, items_by_kind, meta=None):
         "mentioned_users": [{"user": m, "times": c} for m, c in mentions.most_common(30)],
         "technologies": [{"tech": t, "times": c} for t, c in techs.most_common(30)],
         "deleted_removed_items": sorted(flagged, key=lambda d: d["utc"] or "", reverse=True),
-        "all_items": [{
-            "id": i.get("id"), "kind": k, "status": status_of(i, k),
-            "subreddit": i.get("subreddit"), "score": i.get("score"),
-            "utc": iso(i.get("created_utc")), "title": i.get("title"),
-            "text": text_of(i, k)[:2000],
-            "url": "https://www.reddit.com" + i["permalink"] if i.get("permalink")
-                   else i.get("url"),
-        } for k, i in everything],
+        "all_items": [summarize_item(i, k, 2000) for k, i in everything],
     }
 
 

@@ -1,0 +1,2 @@
+# The CLI runs on the standard library alone. This is only needed for the MCP server.
+fastmcp>=4.0,<5

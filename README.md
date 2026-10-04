@@ -10,6 +10,12 @@ No dependencies, no API keys, no login. Just `python3`.
 python3 reddit_osint.py someuser
 ```
 
+The same analysis is also available as MCP tools for LLM clients, see [MCP server](#mcp-server).
+
+```bash
+pip install -r requirements.txt && python mcp_server.py
+```
+
 ---
 
 ## What it does and why it exists
@@ -41,6 +47,7 @@ sufficient.
 - Python 3.9+ (tested on 3.13)
 - No `pip install`. Standard library only.
 - For SOCKS proxies: `pip install pysocks` (optional, only needed for `socks5://`)
+- For the MCP server only: `pip install -r requirements.txt` (FastMCP). The CLI does not need it.
 
 ---
 
@@ -350,6 +357,72 @@ print(session.pool.stats())
 ```
 
 The chain is: `load_proxies` → `ProxyPool` → `PoolSession` → `fetch_all` / `collect` → `analyze`.
+
+---
+
+## MCP server
+
+`mcp_server.py` exposes the same analysis as [MCP](https://modelcontextprotocol.io) tools, so an
+LLM (Claude Desktop, Claude Code, OpenCode, any MCP client) can run the pipeline on its own instead
+of you pasting JSON into it.
+
+```bash
+pip install -r requirements.txt      # the only dependency is fastmcp
+python mcp_server.py                 # stdio
+python mcp_server.py --http          # streamable HTTP on 127.0.0.1:8000
+```
+
+Client config:
+
+```json
+{
+  "mcpServers": {
+    "reddit-osint": {
+      "command": "python3",
+      "args": ["/absolute/path/to/RedditOSINT/mcp_server.py"],
+      "env": { "REDDIT_OSINT_SOURCE": "arctic" }
+    }
+  }
+}
+```
+
+Or through the FastMCP CLI: `fastmcp run mcp_server.py:mcp`.
+
+### Tools
+
+| Tool | What it does | Cost |
+|---|---|---|
+| `get_profile_overview` | Account size, karma, activity window, timezone guess, exposure score. **Start here.** | 1 full fetch |
+| `list_posts` | Posts newest first, filterable by subreddit / keyword / status. | 1 request |
+| `list_comments` | Same for comments. | 1 request |
+| `get_removed_content` | Everything the archive holds that Reddit no longer serves. | 1 full fetch |
+| `find_identifiers` | Emails, crypto addresses, Telegram handles, phones, domains. | 1 full fetch |
+| `get_activity_patterns` | 24h histogram, weekdays, monthly series, timezone guess. | 1 full fetch |
+| `get_affiliations` | Top subreddits, detected technologies, mentioned users. | 1 full fetch |
+| `search_archive` | Archive-wide phrase search, optionally scoped to one author. | 1 request per source |
+
+Plus a `reddit://guide` resource explaining the deletion semantics, the timezone heuristic, the
+exposure score and the environment variables.
+
+### Design notes
+
+- **Cheap calls stay cheap.** `list_posts`, `list_comments` and `search_archive` hit the archive
+  directly with a single targeted request. Only the aggregate tools paginate the whole account.
+- **One fetch per user, then cached.** The aggregate tools share a report cached for
+  `REDDIT_OSINT_CACHE_TTL` seconds (600 by default), so an LLM calling four of them in a row pays
+  for one pagination run, not four. Every response says whether it was served from cache.
+- **Context budget is enforced.** Text is truncated per item (600 chars) and results are capped at
+  100 items. The model is told to paginate with `before` rather than ask for everything at once.
+- **Structured output.** Every tool returns a typed dict, so clients get `structuredContent`
+  instead of prose to parse. Each response carries a `notes` field with its own caveats, which is
+  what stops a model from confidently reporting `[deleted]` content it never actually recovered.
+- **Proxies work the same as the CLI.** `REDDIT_OSINT_PROXIES`, `REDDIT_OSINT_COOLDOWN` and
+  `REDDIT_OSINT_NO_DIRECT` are honoured, including per-IP ban rotation.
+- **Blocking I/O is off the event loop.** The synchronous core runs in a worker thread, so a slow
+  archive cannot stall the server.
+
+The MCP layer has no automated test suite; the analysis engine underneath it is covered by
+`test_reddit_osint.py`.
 
 ---
 
